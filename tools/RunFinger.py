@@ -29,6 +29,7 @@ parser = optparse.OptionParser(usage='python %prog -i 10.10.10.224\nor:\npython 
 parser.add_option('-i','--ip', action="store", help="Target IP address or class C", dest="TARGET", metavar="10.10.10.224", default=None)
 parser.add_option('-a','--all', action="store_true", help="Performs all checks (including MS17-010)", dest="all", default=False)
 parser.add_option('-g','--grep', action="store_true", dest="grep_output", default=False, help="Output in grepable format")
+parser.add_option('-m','--max', action="store", help="Max number of hosts to scan in parallel", dest="max_parallel", metavar="64", default=None, type="int")
 options, args = parser.parse_args()
 
 if options.TARGET is None:
@@ -207,22 +208,15 @@ def ShowResults(Host):
        Hostname, DomainJoined, Time = DomainGrab(Host)
        Signing, OsVer, LanManClient = SmbFinger(Host)
        NullSess = check_smb_null_session(Host)
+       print "Retrieving information for %s..."%Host[0]
+       print "SMB signing:", Signing
+       print "Null Sessions Allowed:", NullSess
        if MS17010Check:
           Ms17010 = check_ms17_010(Host)
-          print "Retrieving information for %s..."%Host[0]
-          print "SMB signing:", Signing
-          print "Null Sessions Allowed:", NullSess
           print "Vulnerable to MS17-010:", Ms17010
-          print "Server Time:", Time[1]
-          print "OS version: '%s'\nLanman Client: '%s'"%(OsVer, LanManClient)
-          print "Machine Hostname: '%s'\nThis machine is part of the '%s' domain\n"%(Hostname, DomainJoined)
-       else:
-          print "Retrieving information for %s..."%Host[0]
-          print "SMB signing:", Signing
-          print "Null Sessions Allowed:", NullSess
-          print "Server Time:", Time[1]
-          print "OS version: '%s'\nLanman Client: '%s'"%(OsVer, LanManClient)
-          print "Machine Hostname: '%s'\nThis machine is part of the '%s' domain\n"%(Hostname, DomainJoined)
+       print "Server Time:", Time[1]
+       print "OS version: '%s'\nLanman Client: '%s'"%(OsVer, LanManClient)
+       print "Machine Hostname: '%s'\nThis machine is part of the '%s' domain\n"%(Hostname, DomainJoined)
     except:
        pass
 
@@ -252,23 +246,31 @@ def ShowSmallResults(Host):
 
 def RunFinger(Host):
     m = re.search("/", str(Host))
+    # A network range was provided
     if m:
         net,_,mask = Host.partition('/')
         mask = int(mask)
         net = atod(net)
-        threads = []
         if options.grep_output:
             func = ShowSmallResults
         else:
             func = ShowResults
-        for host in (dtoa(net+n) for n in range(0, 1<<32-mask)):
-            p = multiprocessing.Process(target=func, args=((host,445),))
-            threads.append(p)
-            p.start()
+        if options.max_parallel:
+            pool = multiprocessing.Pool(options.max_parallel)
+            tasks = []
+            for host in (dtoa(net+n) for n in range(0, 1<<32-mask)):
+                tasks.append((host,445))
+            pool.map_async(func, tasks).get(999) #Hacky but it works. Needed to prevent CTRL+C issues.
+        else:
+            threads = []
+            for host in (dtoa(net+n) for n in range(0, 1<<32-mask)):
+                p = multiprocessing.Process(target=func, args=((host,445),))
+                threads.append(p)
+                p.start()
+    # A single host was provided
     else:
         if options.grep_output:
             ShowSmallResults((Host,445))
         else:
             ShowResults((Host,445))
-
 RunFinger(Host)
